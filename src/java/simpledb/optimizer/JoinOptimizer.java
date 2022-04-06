@@ -130,7 +130,9 @@ public class JoinOptimizer {
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic
             // nested-loops join.
-            return -1.0;
+
+            return card1 + card2 * cost1 + card1 * card2;
+
         }
     }
 
@@ -174,6 +176,24 @@ public class JoinOptimizer {
                                                    String field2PureName, int card1, int card2, boolean t1pkey,
                                                    boolean t2pkey, Map<String, TableStats> stats,
                                                    Map<String, Integer> tableAliasToId) {
+
+        // For equality joins, when one of the attributes is a primary key, the number of tuples produced
+        // by the join cannot be larger than the cardinality of the non-primary key attribute.
+        Integer tableId1 = tableAliasToId.get(table1Alias);
+        Integer tableId2 = tableAliasToId.get(table2Alias);
+        String tableName1 = Database.getCatalog().getTableName(tableId1);
+        String tableName2 = Database.getCatalog().getTableName(tableId2);
+        TableStats tableStats1 = stats.get(tableName1);
+        TableStats tableStats2 = stats.get(tableName2);
+        if (joinOp.equals(Predicate.Op.EQUALS)) {
+            if (t1pkey) {
+                return card1;
+            }
+            if (t2pkey) {
+                return card2;
+            }
+            return Math.max(card1,card2);
+        }
         int card = 1;
         // some code goes here
         return card <= 0 ? 1 : card;
