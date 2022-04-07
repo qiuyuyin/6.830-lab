@@ -85,6 +85,8 @@ public class Join extends Operator {
             TransactionAbortedException {
         int size1 = child1.getTupleDesc().numFields();
         int size2 = child2.getTupleDesc().numFields();
+        this.child1.open();
+        this.child2.open();
         while (this.child1.hasNext()) {
             Tuple child1 = this.child1.next();
             this.child2.rewind();

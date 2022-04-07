@@ -107,10 +107,12 @@ public class HeapFile implements DbFile {
         int pageNumber = page.getId().getPageNumber();
         RandomAccessFile f = null;
         try {
-            f = new RandomAccessFile(this.file,"rw");
-            byte[] bytes = page.getPageData();
-            f.seek((long) pageNumber * BufferPool.getPageSize());
-            f.write(bytes, 0, BufferPool.getPageSize());
+            synchronized (this) {
+                f = new RandomAccessFile(this.file,"rw");
+                byte[] bytes = page.getPageData();
+                f.seek((long) pageNumber * BufferPool.getPageSize());
+                f.write(bytes, 0, BufferPool.getPageSize());
+            }
         } catch (IOException e) {
             e.printStackTrace();
         } finally {
@@ -136,21 +138,30 @@ public class HeapFile implements DbFile {
         ArrayList<Page> pageList = new ArrayList<>();
         for (int i = 0; i < numPages(); i++) {
             HeapPage p = (HeapPage) Database.getBufferPool().getPage(tid,
-                    new HeapPageId(this.getId(),i),Permissions.READ_WRITE);
+                    new HeapPageId(this.getId(),i),Permissions.READ_ONLY);
+            BufferPool.LockManager lockManager = Database.getBufferPool().lockMap.get(p.getId());
             if (p.getNumEmptySlots() == 0){
+                lockManager.unlock(tid);
                 continue;
             }
+            lockManager.tryLock(tid,Permissions.READ_WRITE);
             p.insertTuple(t);
             pageList.add(p);
             return pageList;
         }
         // if no page , create a page to store
-        BufferedOutputStream bw = new BufferedOutputStream(new FileOutputStream(file,true));
-        byte[] emptyData = HeapPage.createEmptyPageData();
-        bw.write(emptyData);
-        bw.close();
+        // if another thread use this file , it will block until ...
+        synchronized (this) {
+            BufferedOutputStream bw = new BufferedOutputStream(new FileOutputStream(file,true));
+            byte[] emptyData = HeapPage.createEmptyPageData();
+            bw.write(emptyData);
+            bw.close();
+        }
+
         HeapPage p = (HeapPage) Database.getBufferPool().getPage(tid,
                 new HeapPageId(getId(),numPages() - 1),Permissions.READ_WRITE);
+        BufferPool.LockManager lockManager = Database.getBufferPool().lockMap.get(p.getId());
+        lockManager.tryLock(tid,Permissions.READ_WRITE);
         p.insertTuple(t);
         pageList.add(p);
         return pageList;

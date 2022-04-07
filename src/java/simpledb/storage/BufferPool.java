@@ -3,15 +3,14 @@ package simpledb.storage;
 import simpledb.common.Database;
 import simpledb.common.Permissions;
 import simpledb.common.DbException;
-import simpledb.common.DeadlockException;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
-import java.util.LinkedList;
-import java.util.List;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -41,6 +40,8 @@ public class BufferPool {
     public static final int DEFAULT_PAGES = 50;
 
     private final ConcurrentHashMap<Integer, Page> pageTable;
+
+    public final ConcurrentHashMap<PageId, LockManager> lockMap = new ConcurrentHashMap<>();
 
     private final LinkedList<Integer> pageList = new LinkedList<>();
 
@@ -95,14 +96,19 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
-        lock.lock();
         Page page = pageTable.get(pid.hashCode());
+        // get the lockManager to lock this page
+        LockManager lockManager = this.lockMap.get(pid);
+        if (lockManager == null) {
+            lockManager = new LockManager();
+            this.lockMap.put(pid,lockManager);
+        }
+        lockManager.tryLock(tid,perm);
         if (page != null) {
             // move this pid to the first
             int index = pageList.indexOf(pid.hashCode());
             pageList.remove(index);
             pageList.addFirst(pid.hashCode());
-            lock.unlock();
             return page;
         }
         // get page from the dist file
@@ -113,7 +119,6 @@ public class BufferPool {
         page = dbFile.readPage(pid);
         pageTable.put(pid.hashCode(), page);
         pageList.addFirst(pid.hashCode());
-        lock.unlock();
         return page;
     }
 
@@ -129,6 +134,10 @@ public class BufferPool {
     public void unsafeReleasePage(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for lab1|lab2
+        LockManager lockManager = lockMap.get(pid);
+        if (lockManager.check(tid)) {
+            lockManager.unlock(tid);
+        }
     }
 
     /**
@@ -139,6 +148,13 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid) {
         // some code goes here
         // not necessary for lab1|lab2
+        try {
+            flushPages(tid);
+            unlockAll(tid);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+
     }
 
     /**
@@ -147,7 +163,12 @@ public class BufferPool {
     public boolean holdsLock(TransactionId tid, PageId p) {
         // some code goes here
         // not necessary for lab1|lab2
-        return false;
+        LockManager manager = this.lockMap.get(p);
+        if (manager != null) {
+            return manager.check(tid);
+        } else{
+            return false;
+        }
     }
 
     /**
@@ -160,6 +181,25 @@ public class BufferPool {
     public void transactionComplete(TransactionId tid, boolean commit) {
         // some code goes here
         // not necessary for lab1|lab2
+        if (commit) {
+            try {
+                flushPages(tid);
+                for (Page value : pageTable.values()) {
+                    if (value.isDirty() == tid) {
+                        value.markDirty(false,tid);
+                    }
+                }
+                unlockAll(tid);
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        } else {
+            for (Page value : pageTable.values()) {
+                if (value.isDirty() == tid) {
+                    discardPage(value.getId());
+                }
+            }
+        }
     }
 
     /**
@@ -179,14 +219,15 @@ public class BufferPool {
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
+        HeapFile dbFile = (HeapFile) Database.getCatalog().getDatabaseFile(tableId);
 
         List<Page> pages = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
         for (Page page : pages) {
+            LockManager lockManager = this.lockMap.get(page.getId());
+            lockManager.tryLock(tid,Permissions.READ_WRITE);
             page.markDirty(true, tid);
             this.pageTable.put(page.getId().hashCode(), page);
         }
-
-
     }
 
     /**
@@ -206,6 +247,8 @@ public class BufferPool {
             throws DbException, IOException, TransactionAbortedException {
         List<Page> pages = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId()).deleteTuple(tid, t);
         for (Page page : pages) {
+            LockManager lockManager = this.lockMap.get(page.getId());
+            lockManager.tryLock(tid,Permissions.READ_WRITE);
             page.markDirty(true, tid);
             this.pageTable.put(page.getId().hashCode(), page);
         }
@@ -234,11 +277,12 @@ public class BufferPool {
      * are removed from the cache so they can be reused safely
      */
     public synchronized void discardPage(PageId pid) {
-        try {
-            flushPage(pid);
-        } catch (IOException e) {
-            e.printStackTrace();
+        int index = pageList.indexOf(pid.hashCode());
+        if (index >= 0 && index < pageList.size()) {
+            pageList.remove(index);
         }
+        pageTable.remove(pid.hashCode());
+        lockMap.remove(pid);
     }
 
 
@@ -258,6 +302,11 @@ public class BufferPool {
     public synchronized void flushPages(TransactionId tid) throws IOException {
         // some code goes here
         // not necessary for lab1|lab2
+        for (Page page : this.pageTable.values()) {
+            if (page.isDirty() == tid) {
+                flushPage(page.getId());
+            }
+        }
     }
 
     /**
@@ -265,14 +314,88 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        // some code goes here
-        // not necessary for lab1
-        Integer last = pageList.getLast();
-        Page page = pageTable.get(last);
-        pageList.removeLast();
-        discardPage(page.getId());
-        pageTable.remove(last);
+        // remove this page from the cache
+        for (int i = pageList.size() - 1; i >= 0; i--) {
+            Integer integer = pageList.get(i);
+            TransactionId dirty = pageTable.get(integer).isDirty();
+            if (dirty == null) {
+                discardPage(pageTable.get(integer).getId());
+                return;
+            }
+        }
+        throw new DbException("no enough space");
 
     }
+    private void unlockAll(TransactionId tid) {
+        for (LockManager value : this.lockMap.values()) {
+            value.unlock(tid);
+        }
+    }
+    class LockManager {
+        // 一般一个线程一个事务
+        // 一个事务一次最多可以获得多个page的锁，可能会 dead lock
+        // 一个page中需要一个读写锁来保证线程安全，首先实现单个锁（读写都锁）
+        public AtomicInteger integer; // 2 为 wlock 1 为  rlock，为 0 unlock
+        public TransactionId tid;
+        public Set<TransactionId> tidSet = new HashSet<>();;
 
+        public LockManager() {
+            this.integer = new AtomicInteger(0);
+        }
+
+        public synchronized void tryLock(TransactionId tid, Permissions permissions) throws TransactionAbortedException{
+            boolean check = check(tid);
+            if (permissions.equals(Permissions.READ_ONLY)) {
+                long start = System.currentTimeMillis();
+                long timeout = new Random().nextInt(333) + 33;
+
+                while (this.integer.get() != 0 && !check) {
+                    long now = System.currentTimeMillis();
+                    if(now-start > timeout){
+                        transactionComplete(tid, false);
+                        throw new TransactionAbortedException();
+                    }
+
+                }
+                this.integer.set(1);
+                this.tidSet.add(tid);
+            } else {
+                // if not 0 , block
+                long start = System.currentTimeMillis();
+                long timeout = new Random().nextInt(100) + 444;
+
+                while (this.integer.get() != 0 && !check) {
+                    long now = System.currentTimeMillis();
+                    if(now-start > timeout){
+                        transactionComplete(tid, false);
+                        throw new TransactionAbortedException();
+                    }
+                }
+                this.integer.set(2);
+                this.tid = tid;
+            }
+        }
+        public synchronized void unlock(TransactionId tid) {
+            if (this.integer.get() != 0) {
+                if (this.integer.get() == 1) {
+                    this.tidSet.remove(tid);
+                    if (tidSet.size() == 0) {
+                        this.integer.set(0);
+                    }
+                } else {
+                    if (this.tid == tid) {
+                        tid = null;
+                        this.integer.set(0);
+                    }
+                }
+            }
+            this.notify();
+        }
+
+
+        public synchronized boolean check(TransactionId tid) {
+            return this.tid == tid || this.tidSet.contains(tid);
+        }
+
+    }
 }
