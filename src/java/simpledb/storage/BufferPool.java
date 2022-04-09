@@ -219,7 +219,6 @@ public class BufferPool {
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
-        HeapFile dbFile = (HeapFile) Database.getCatalog().getDatabaseFile(tableId);
 
         List<Page> pages = Database.getCatalog().getDatabaseFile(tableId).insertTuple(tid, t);
         for (Page page : pages) {
@@ -347,7 +346,7 @@ public class BufferPool {
             boolean check = check(tid);
             if (permissions.equals(Permissions.READ_ONLY)) {
                 long start = System.currentTimeMillis();
-                long timeout = new Random().nextInt(333) + 33;
+                long timeout = new Random().nextInt(2222) + 1000;
 
                 while (this.integer.get() != 0 && !check) {
                     long now = System.currentTimeMillis();
@@ -362,7 +361,7 @@ public class BufferPool {
             } else {
                 // if not 0 , block
                 long start = System.currentTimeMillis();
-                long timeout = new Random().nextInt(100) + 444;
+                long timeout = new Random().nextInt(2222) + 1000;
 
                 while (this.integer.get() != 0 && !check) {
                     long now = System.currentTimeMillis();

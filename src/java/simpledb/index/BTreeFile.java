@@ -188,7 +188,31 @@ public class BTreeFile implements DbFile {
                                        Field f)
 					throws DbException, TransactionAbortedException {
 		// some code goes here
-        return null;
+		while (pid.pgcateg() != BTreePageId.LEAF) {
+
+			BTreeInternalPage internal = (BTreeInternalPage) this.getPage(tid, dirtypages, pid, Permissions.READ_ONLY);
+
+			Iterator<BTreeEntry> treeEntryIterator = internal.iterator();
+
+			while (treeEntryIterator.hasNext()) {
+				BTreeEntry next = treeEntryIterator.next();
+				Field key = next.getKey();
+				if (f == null) {
+					pid = next.getLeftChild();
+					break;
+				}
+				if (f.compare(Op.LESS_THAN_OR_EQ,key)) {
+					pid = next.getLeftChild();
+					break;
+				}
+				if (!treeEntryIterator.hasNext()) {
+					pid = next.getRightChild();
+				}
+			}
+		}
+		BTreeLeafPage page = (BTreeLeafPage) this.getPage(tid, dirtypages, pid, perm);
+
+		return page;
 	}
 	
 	/**
@@ -211,19 +235,19 @@ public class BTreeFile implements DbFile {
 	/**
 	 * Split a leaf page to make room for new tuples and recursively split the parent node
 	 * as needed to accommodate a new entry. The new entry should have a key matching the key field
-	 * of the first tuple in the right-hand page (the key is "copied up"), and child pointers 
-	 * pointing to the two leaf pages resulting from the split.  Update sibling pointers and parent 
-	 * pointers as needed.  
-	 * 
+	 * of the first tuple in the right-hand page (the key is "copied up"), and child pointers
+	 * pointing to the two leaf pages resulting from the split.  Update sibling pointers and parent
+	 * pointers as needed.
+	 *
 	 * Return the leaf page into which a new tuple with key field "field" should be inserted.
-	 * 
+	 *
 	 * @param tid - the transaction id
 	 * @param dirtypages - the list of dirty pages which should be updated with all new dirty pages
 	 * @param page - the leaf page to split
 	 * @param field - the key field of the tuple to be inserted after the split is complete. Necessary to know
 	 * which of the two pages to return.
 	 * @see #getParentWithEmptySlots(TransactionId, Map, BTreePageId, Field)
-	 * 
+	 *
 	 * @return the leaf page into which the new tuple should be inserted
 	 * @throws DbException
 	 * @throws IOException
@@ -237,21 +261,66 @@ public class BTreeFile implements DbFile {
 		// page and moving half of the tuples to the new page.  Copy the middle key up
 		// into the parent page, and recursively split the parent as needed to accommodate
 		// the new entry.  getParentWithEmtpySlots() will be useful here.  Don't forget to update
-		// the sibling pointers of all the affected leaf pages.  Return the page into which a 
+		// the sibling pointers of all the affected leaf pages.  Return the page into which a
 		// tuple with the given key field should be inserted.
-        return null;
-		
+		BTreeLeafPage emptyPage = (BTreeLeafPage) this.getEmptyPage(tid, dirtypages, BTreePageId.LEAF);
+
+		int sum = page.getMaxTuples();
+		int index = sum / 2;
+		Iterator<Tuple> iterator = page.iterator();
+		for (int i = 0; i < index; i++) {
+			iterator.next();
+		}
+		while (iterator.hasNext()){
+			Tuple reset = iterator.next();
+			page.deleteTuple(reset);
+			emptyPage.insertTuple(reset);
+		}
+		Tuple tuple = emptyPage.iterator().next();
+
+		BTreeInternalPage parentWithEmptySlots =
+				this.getParentWithEmptySlots(tid, dirtypages, page.getParentId(), tuple.getField(keyField));
+		page.setParentId(parentWithEmptySlots.getId());
+		emptyPage.setParentId(parentWithEmptySlots.getId());
+
+
+
+		emptyPage.setParentId(parentWithEmptySlots.getId());
+		page.setParentId(parentWithEmptySlots.getId());
+
+
+		BTreeEntry newEntry = new BTreeEntry(tuple.getField(keyField), page.getId(), emptyPage.getId());
+		parentWithEmptySlots.insertEntry(newEntry);
+
+
+		emptyPage.setLeftSiblingId(page.getId());
+		emptyPage.setRightSiblingId(page.getRightSiblingId());
+		page.setRightSiblingId(emptyPage.getId());
+		if (emptyPage.getRightSiblingId() != null) {
+			BTreeLeafPage rrPage = (BTreeLeafPage) getPage(tid, dirtypages, emptyPage.getRightSiblingId(), Permissions.READ_WRITE);
+			rrPage.setLeftSiblingId(emptyPage.getId());
+			dirtypages.put(rrPage.getId(),rrPage);
+		}
+		dirtypages.put(page.getId(),page);
+		dirtypages.put(emptyPage.getId(),emptyPage);
+		dirtypages.put(parentWithEmptySlots.getId(),parentWithEmptySlots);
+
+		if (field.compare(Op.GREATER_THAN,tuple.getField(keyField))) {
+			return emptyPage;
+		}
+		return page;
+
 	}
-	
+
 	/**
 	 * Split an internal page to make room for new entries and recursively split its parent page
-	 * as needed to accommodate a new entry. The new entry for the parent should have a key matching 
-	 * the middle key in the original internal page being split (this key is "pushed up" to the parent). 
-	 * The child pointers of the new parent entry should point to the two internal pages resulting 
+	 * as needed to accommodate a new entry. The new entry for the parent should have a key matching
+	 * the middle key in the original internal page being split (this key is "pushed up" to the parent).
+	 * The child pointers of the new parent entry should point to the two internal pages resulting
 	 * from the split. Update parent pointers as needed.
-	 * 
+	 *
 	 * Return the internal page into which an entry with key field "field" should be inserted
-	 * 
+	 *
 	 * @param tid - the transaction id
 	 * @param dirtypages - the list of dirty pages which should be updated with all new dirty pages
 	 * @param page - the internal page to split
@@ -259,14 +328,14 @@ public class BTreeFile implements DbFile {
 	 * which of the two pages to return.
 	 * @see #getParentWithEmptySlots(TransactionId, Map, BTreePageId, Field)
 	 * @see #updateParentPointers(TransactionId, Map, BTreeInternalPage)
-	 * 
+	 *
 	 * @return the internal page into which the new entry should be inserted
 	 * @throws DbException
 	 * @throws IOException
 	 * @throws TransactionAbortedException
 	 */
 	public BTreeInternalPage splitInternalPage(TransactionId tid, Map<PageId, Page> dirtypages,
-			BTreeInternalPage page, Field field) 
+			BTreeInternalPage page, Field field)
 					throws DbException, IOException, TransactionAbortedException {
 		// some code goes here
         //
@@ -277,9 +346,41 @@ public class BTreeFile implements DbFile {
 		// the parent pointers of all the children moving to the new page.  updateParentPointers()
 		// will be useful here.  Return the page into which an entry with the given key field
 		// should be inserted.
-		return null;
+		BTreeInternalPage emptyPage = (BTreeInternalPage) this.getEmptyPage(tid, dirtypages, BTreePageId.INTERNAL);
+		int sum = page.getMaxEntries();
+		int index = sum / 2;
+		Iterator<BTreeEntry> internal = page.iterator();
+		for (int i = 0; i < index; i++) {
+			internal.next();
+		}
+		BTreeEntry mid = internal.next();
+		page.deleteKeyAndRightChild(mid);
+
+		while (internal.hasNext()) {
+			BTreeEntry bTreeEntry = internal.next();
+			page.deleteKeyAndRightChild(bTreeEntry);
+			emptyPage.insertEntry(bTreeEntry);
+		}
+
+		updateParentPointers(tid, dirtypages, emptyPage);
+		BTreeInternalPage parentWithEmptySlots = this.getParentWithEmptySlots(tid, dirtypages, page.getParentId(), mid.getKey());
+
+		page.setParentId(parentWithEmptySlots.getId());
+		emptyPage.setParentId(parentWithEmptySlots.getId());
+
+
+		parentWithEmptySlots.insertEntry(new BTreeEntry(mid.getKey(),page.getId(),emptyPage.getId()));
+
+		dirtypages.put(page.getId(),page);
+		dirtypages.put(emptyPage.getId(),emptyPage);
+		dirtypages.put(parentWithEmptySlots.getId(),parentWithEmptySlots);
+
+		if (field.compare(Op.GREATER_THAN_OR_EQ,mid.getKey())) {
+			return emptyPage;
+		}
+		return page;
 	}
-	
+
 	/**
 	 * Method to encapsulate the process of getting a parent page ready to accept new entries.
 	 * This may mean creating a page to become the new root of the tree, splitting the existing 

@@ -61,7 +61,6 @@ public class Aggregate extends Operator {
         this.afield = afield;
         this.gfield = gfield;
         this.tupleDesc = new TupleDesc(new Type[]{fieldType,Type.INT_TYPE},new String[]{"groupVal", "aggregateVal"});
-
     }
 
     /**

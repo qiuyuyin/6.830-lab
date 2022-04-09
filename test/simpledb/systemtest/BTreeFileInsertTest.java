@@ -104,7 +104,7 @@ public class BTreeFileInsertTest extends SimpleDbTestBase {
 		BTreeChecker.checkRep(empty, tid, new HashMap<>(), true);
 
 		// now search for some ranges and make sure we find all the tuples
-		IndexPredicate ipred = new IndexPredicate(Op.EQUALS, new IntField(3));
+		IndexPredicate ipred = new IndexPredicate(Op.EQUALS, new IntField(0));
 		DbFileIterator it = empty.indexIterator(tid, ipred);
 		it.open();
 		int count = 0;
