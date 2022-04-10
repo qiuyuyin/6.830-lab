@@ -96,7 +96,6 @@ public class BufferPool {
      */
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
             throws TransactionAbortedException, DbException {
-        Page page = pageTable.get(pid.hashCode());
         // get the lockManager to lock this page
         LockManager lockManager = this.lockMap.get(pid);
         if (lockManager == null) {
@@ -104,10 +103,10 @@ public class BufferPool {
             this.lockMap.put(pid,lockManager);
         }
         lockManager.tryLock(tid,perm);
+        Page page = pageTable.get(pid.hashCode());
         if (page != null) {
             // move this pid to the first
-            int index = pageList.indexOf(pid.hashCode());
-            pageList.remove(index);
+            pageList.remove((Integer) pid.hashCode());
             pageList.addFirst(pid.hashCode());
             return page;
         }
@@ -279,8 +278,8 @@ public class BufferPool {
         int index = pageList.indexOf(pid.hashCode());
         if (index >= 0 && index < pageList.size()) {
             pageList.remove(index);
+            pageTable.remove(pid.hashCode());
         }
-        pageTable.remove(pid.hashCode());
         lockMap.remove(pid);
     }
 
@@ -291,6 +290,7 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized void flushPage(PageId pid) throws IOException {
+
         Page page = this.pageTable.get(pid.hashCode());
         Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
     }
@@ -316,6 +316,9 @@ public class BufferPool {
         // remove this page from the cache
         for (int i = pageList.size() - 1; i >= 0; i--) {
             Integer integer = pageList.get(i);
+            if (pageTable.get(integer) == null) {
+                System.out.println("ddd");
+            }
             TransactionId dirty = pageTable.get(integer).isDirty();
             if (dirty == null) {
                 discardPage(pageTable.get(integer).getId());
@@ -346,9 +349,9 @@ public class BufferPool {
             boolean check = check(tid);
             if (permissions.equals(Permissions.READ_ONLY)) {
                 long start = System.currentTimeMillis();
-                long timeout = new Random().nextInt(2222) + 1000;
+                long timeout = new Random().nextInt(222) + 1000;
 
-                while (this.integer.get() != 0 && !check) {
+                while (this.integer.get() == 2 && !check) {
                     long now = System.currentTimeMillis();
                     if(now-start > timeout){
                         transactionComplete(tid, false);
@@ -361,7 +364,7 @@ public class BufferPool {
             } else {
                 // if not 0 , block
                 long start = System.currentTimeMillis();
-                long timeout = new Random().nextInt(2222) + 1000;
+                long timeout = new Random().nextInt(222) + 1000;
 
                 while (this.integer.get() != 0 && !check) {
                     long now = System.currentTimeMillis();
@@ -374,6 +377,7 @@ public class BufferPool {
                 this.tid = tid;
             }
         }
+
         public synchronized void unlock(TransactionId tid) {
             if (this.integer.get() != 0) {
                 if (this.integer.get() == 1) {
@@ -388,7 +392,6 @@ public class BufferPool {
                     }
                 }
             }
-            this.notify();
         }
 
 

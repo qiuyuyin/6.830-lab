@@ -75,7 +75,7 @@ public class BTreePageId implements PageId {
 	 * @see BufferPool
 	 */
 	public int hashCode() {
-	    return Objects.hash(tableId, pgNo, pgcateg);
+	    return (tableId + "" + pgNo + this.tableId).hashCode();
 	}
 
 	/**
