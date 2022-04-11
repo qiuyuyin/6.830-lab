@@ -182,9 +182,10 @@ public class BufferPool {
         // not necessary for lab1|lab2
         if (commit) {
             try {
-                flushPages(tid);
                 for (Page value : pageTable.values()) {
                     if (value.isDirty() == tid) {
+                        flushPage(value.getId());
+                        value.setBeforeImage();
                         value.markDirty(false,tid);
                     }
                 }
@@ -196,8 +197,11 @@ public class BufferPool {
             for (Page value : pageTable.values()) {
                 if (value.isDirty() == tid) {
                     discardPage(value.getId());
+
                 }
             }
+            unlockAll(tid);
+
         }
     }
 
@@ -280,7 +284,7 @@ public class BufferPool {
             pageList.remove(index);
             pageTable.remove(pid.hashCode());
         }
-        lockMap.remove(pid);
+
     }
 
 
@@ -290,9 +294,16 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized void flushPage(PageId pid) throws IOException {
+        // append an update record to the log, with
+        // a before-image and after-image.
 
-        Page page = this.pageTable.get(pid.hashCode());
-        Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(page);
+        Page p = this.pageTable.get(pid.hashCode());
+        TransactionId dirtier = p.isDirty();
+        if (dirtier != null){
+            Database.getLogFile().logWrite(dirtier, p.getBeforeImage(), p);
+            Database.getLogFile().force();
+        }
+        Database.getCatalog().getDatabaseFile(pid.getTableId()).writePage(p);
     }
 
     /**
